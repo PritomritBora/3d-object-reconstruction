@@ -36,11 +36,14 @@ class Reconstructor:
     # ── COLMAP dense MVS (optional, requires CUDA COLMAP) ─────────
     def _colmap_dense_mvs(self, sfm_result) -> Optional[Path]:
         """
-        Optional dense reconstruction via COLMAP patch-match stereo.
-        Requires a CUDA-enabled COLMAP binary (conda install -c conda-forge colmap).
-        Not used by default — enable by calling this from run() instead of _sparse_to_ply().
+        EXPERIMENTAL — not used by default.
 
-        Produces ~100K–1M points vs ~1K–10K from sparse, but takes 2–3 min extra.
+        Dense reconstruction via COLMAP patch-match stereo + stereo fusion.
+        Requires a CUDA-enabled COLMAP binary (conda install -c conda-forge colmap).
+
+        Results depend heavily on the point cloud bbox scale — if the scene
+        includes background, the voxel downsample in meshing destroys detail.
+        To enable: replace `_sparse_to_ply` with this method in `run()`.
         """
         dense_dir = self.work_dir / "dense"
         if dense_dir.exists():
@@ -133,12 +136,26 @@ class Reconstructor:
                  f"median={int(np.median(track_lengths))} "
                  f"max={track_lengths.max()})")
 
-        # Track-length filter — keep top 80% by visibility
-        min_track = max(2, int(np.percentile(track_lengths, 20)))
+        # Track-length filter — adaptive percentile based on track length spread.
+        # High spread (max/median > 4) means object points have much longer tracks
+        # than background — use a tighter filter. Low spread = uniform scene, be lenient.
+        spread = track_lengths.max() / max(np.median(track_lengths), 1)
+        if spread > 8:
+            percentile = 40  # tight: object clearly dominates track lengths
+        else:
+            percentile = 20  # lenient: uniform scene, don't over-filter
+        min_track = max(2, int(np.percentile(track_lengths, percentile)))
+        log.info(f"Track filter: spread={spread:.1f}× → percentile={percentile} min_track={min_track}")
         mask = track_lengths >= min_track
         if mask.sum() >= 50:
             pts, colors = pts[mask], colors[mask]
         log.info(f"After track filter (min_track={min_track}): {len(pts):,} points")
+
+        # Foreground depth filter — keep the nearest cluster of points.
+        # Uses camera-space Z from all registered poses to find the closest
+        # dense cluster, then discards points beyond 2× that distance.
+        # This removes background (fence, wall) when object is in foreground.
+        pts, colors = self._foreground_depth_filter(pts, colors, sfm_result.poses)
 
         # Statistical outlier removal
         import open3d as o3d
@@ -152,6 +169,70 @@ class Reconstructor:
         o3d.io.write_point_cloud(str(out_ply), pcd, write_ascii=False)
         log.info(f"Saved → {out_ply}")
         return out_ply
+
+    def _foreground_depth_filter(self, pts, colors, poses):
+        """
+        Keep only points in the nearest depth cluster.
+
+        Projects all sparse points into camera space across all registered views,
+        computes the median camera-space Z, then keeps only points within
+        [0, median_z * 1.5]. This discards background points (fence, wall)
+        when the object is closer to the camera than the background.
+
+        Falls back to returning all points if poses are unavailable.
+        """
+        if not poses:
+            return pts, colors
+
+        all_z = []
+        pts_h = np.hstack([pts, np.ones((len(pts), 1), dtype=np.float32)])
+
+        for img_name, (T_wc, K) in list(poses.items())[:20]:  # sample 20 views
+            T_cw = np.linalg.inv(T_wc)
+            pts_cam = (T_cw @ pts_h.T).T
+            zs = pts_cam[:, 2]
+            all_z.append(zs[zs > 0.01])
+
+        if not all_z:
+            return pts, colors
+
+        all_z = np.concatenate(all_z)
+        # 20th percentile = nearest significant cluster (foreground object)
+        near_z = float(np.percentile(all_z, 20))
+        far_z = float(np.percentile(all_z, 80))
+
+        # Only apply depth filter if there's a clear foreground/background separation
+        # (background is >2× further than foreground)
+        log.info(f"Depth analysis: near_z={near_z:.2f}m far_z={far_z:.2f}m ratio={far_z/near_z:.1f}×")
+        if far_z < near_z * 2.0:
+            log.info("Depth range small — skipping depth filter (object fills frame)")
+            return pts, colors
+
+        # Keep points within 2× the near depth — removes distant background
+        depth_limit = near_z * 2.0
+
+        # Compute per-point median depth across all sampled views
+        per_point_z = np.zeros(len(pts), dtype=np.float64)
+        count = np.zeros(len(pts), dtype=np.int32)
+        for img_name, (T_wc, K) in list(poses.items())[:20]:
+            T_cw = np.linalg.inv(T_wc)
+            pts_cam = (T_cw @ pts_h.T).T
+            zs = pts_cam[:, 2]
+            valid = zs > 0.01
+            per_point_z[valid] += zs[valid]
+            count[valid] += 1
+
+        count = np.maximum(count, 1)
+        mean_z = per_point_z / count
+        mask = (mean_z > 0.01) & (mean_z <= depth_limit)
+
+        if mask.sum() < 50:
+            log.warning("Foreground depth filter too aggressive, skipping.")
+            return pts, colors
+
+        log.info(f"Foreground depth filter (limit={depth_limit:.2f}m): "
+                 f"{mask.sum():,}/{len(pts):,} points kept")
+        return pts[mask], colors[mask]
 
     # ── Helpers ────────────────────────────────────────────────────
     def _cmd(self, args: list) -> int:

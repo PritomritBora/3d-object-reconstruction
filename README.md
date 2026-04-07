@@ -7,17 +7,32 @@ Converts a set of RGB images (< 200) into a clean, editable triangle mesh (OBJ/P
 ## Architecture
 
 ```
-Images → Blur Filter → COLMAP SfM → Track-Length Filter → Poisson Reconstruction → OBJ/PLY
+Images
+  │
+  ▼
+[1] Feature Extraction & SfM  (COLMAP)
+    • Blur filter — removes motion-blurred frames using center-crop Laplacian variance
+    • SIFT feature extraction + exhaustive/sequential matching
+    • Incremental SfM → camera poses + sparse 3D point cloud
+  │
+  ▼
+[2] Reconstruction  (COLMAP sparse cloud)
+    • Track-length filter — keeps points seen in ≥ 20th percentile of views
+      (object points appear in many views; background points appear in few)
+    • Statistical outlier removal
+  │
+  ▼
+[3] Meshing  (Open3D + trimesh)
+    • Poisson surface reconstruction (adaptive depth 7–9)
+    • Largest connected component filter
+    • Hole filling (trimesh)
+    • Laplacian smoothing (3 iterations)
+    • Quadric decimation → ≤ 50K faces
+    • Vertex normal computation
+  │
+  ▼
+OBJ / PLY
 ```
-
-| Stage | Method | Notes |
-|-------|--------|-------|
-| Frame selection | Laplacian variance blur filter | Keeps sharpest 85% of frames |
-| Feature extraction | COLMAP SIFT (CPU) | Exhaustive matching for <120 images |
-| SfM | COLMAP incremental mapper | Produces metric sparse point cloud |
-| Background filtering | Track-length filter | Removes points seen in few views (background) |
-| Surface reconstruction | Poisson (Open3D, depth=7) | Adaptive voxel size from point cloud density |
-| Cleanup | Largest component + hole fill + decimation | ≤ 50K faces output |
 
 ---
 
@@ -36,22 +51,14 @@ Requires Python 3.9+. CUDA recommended but not required.
 ### 2. COLMAP
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu/Debian (CPU build — sufficient for SfM)
 sudo apt install colmap
 
-# macOS
-brew install colmap
+# Or via conda (includes CUDA support for optional dense MVS)
+conda install -c conda-forge colmap
 ```
 
-> Note: Install the CPU-only build. GPU COLMAP is not required — the pipeline uses `SiftExtraction.use_gpu 0`.
-
-### 3. Optional: background removal
-
-```bash
-pip install rembg onnxruntime
-```
-
-Used for foreground masking in the depth fusion fallback path.
+> The pipeline uses CPU SIFT by default (`FeatureExtraction.use_gpu 0`), so a CPU-only COLMAP build works fine.
 
 ---
 
@@ -63,37 +70,43 @@ python run.py --input ./images --output mesh.obj
 
 ### Options
 
-```
---input           Directory of input RGB images (.jpg / .jpeg / .png)
---output          Output mesh path (.obj or .ply)
---max-faces       Max faces after decimation (default: 50000)
---work-dir        Custom working directory for intermediate files
---keep-workspace  Keep intermediate files after completion
-```
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--input` | required | Directory of RGB images (.jpg / .JPG / .png) |
+| `--output` | required | Output mesh path (.obj or .ply) |
+| `--max-faces` | 50000 | Max triangles after decimation |
+| `--work-dir` | `<output>_workspace` | Intermediate file directory |
+| `--keep-workspace` | off | Keep intermediate files after completion |
 
 ---
 
 ## Capture Guidelines
 
-Mesh quality depends heavily on input quality. For best results:
+Mesh quality depends heavily on input quality.
 
 | Factor | Recommendation |
 |--------|---------------|
 | Distance | 30–60 cm from object |
 | Coverage | Full 360° orbit at 2–3 height levels |
 | Speed | Move slowly — 30–40s per full orbit |
-| Lighting | Bright, diffuse (avoid harsh shadows) |
-| Background | Plain/dark background preferred |
-| Frame count | 60–120 frames |
+| Lighting | Bright, diffuse (avoid harsh shadows or direct sunlight) |
+| Background | Plain or dark background preferred |
+| Frame count | 50–120 frames |
+| Sharpness | Center-crop Laplacian variance > 50 (checked automatically) |
 
 Check your capture sharpness before running:
+
 ```bash
 python3 -c "
 import cv2, numpy as np, os, sys
-imgs = [f for f in os.listdir(sys.argv[1]) if f.endswith(('.jpg','.png'))]
-scores = [cv2.Laplacian(cv2.imread(f'{sys.argv[1]}/{f}', 0), cv2.CV_64F).var() for f in imgs]
-print(f'Frames: {len(scores)}, Min: {min(scores):.0f}, Median: {np.median(scores):.0f}, Max: {max(scores):.0f}')
-print('Target: median > 50 for good results')
+folder = sys.argv[1]
+scores = []
+for f in os.listdir(folder):
+    img = cv2.imread(f'{folder}/{f}', 0)
+    if img is not None:
+        h, w = img.shape
+        scores.append(cv2.Laplacian(img[h//4:3*h//4, w//4:3*w//4], cv2.CV_64F).var())
+print(f'Frames: {len(scores)}  Median sharpness: {np.median(scores):.0f}  (target: >50)')
 " ./images
 ```
 
@@ -101,24 +114,24 @@ print('Target: median > 50 for good results')
 
 ## Timing Benchmark
 
-Measured on RTX 3060, Middlebury Temple Ring dataset (47 images, 1920×1080):
+Measured on RTX 3060, Buddha head dataset (67 images, 2736×1080):
 
 | Stage | Time |
 |-------|------|
-| Feature extraction / SfM | ~27s |
-| Reconstruction (sparse cloud) | ~4s |
-| Meshing + decimation | ~37s |
-| **Total** | **~68s (1.15 min)** |
+| Feature extraction / SfM | ~44s |
+| Reconstruction (sparse cloud) | ~3s |
+| Meshing (Poisson + cleanup) | ~2s |
+| **Total** | **~49s** |
 
 ---
 
-## Output Quality
+## Output
 
 - Triangle mesh with vertex normals
 - ≤ 50K faces after quadric decimation
 - Degenerate triangles removed
 - Largest connected component kept
-- Holes filled via trimesh
+- Small holes filled (requires `trimesh`)
 
 ---
 
@@ -127,21 +140,23 @@ Measured on RTX 3060, Middlebury Temple Ring dataset (47 images, 1920×1080):
 | Package | Purpose |
 |---------|---------|
 | `open3d` | Normal estimation, Poisson reconstruction, decimation, export |
-| `opencv-python` | Image loading, blur detection |
+| `opencv-python` | Image loading, blur detection, resizing |
 | `trimesh` | Hole filling |
-| `torch` | Depth model inference (fallback path) |
-| `transformers` | Depth Anything V2 (fallback path) |
-| `rembg` | Background removal (fallback path) |
-| `colmap` (binary) | SfM — must be installed separately |
+| `torch` + `torchvision` | Available for optional depth model extensions |
+| `colmap` (binary) | SfM — must be installed separately (see Setup) |
 
 ---
 
 ## Troubleshooting
 
-**Few images registered** — check sharpness scores. If median < 20, the video has too much motion blur. Move the camera more slowly.
+**Few images registered (< 50% of input)**
+Check sharpness scores. If median < 20, the video has too much motion blur — move the camera more slowly.
 
-**Empty mesh / too few points** — COLMAP needs texture to find keypoints. Dark matte objects (black plastic, metal) are challenging. Use brighter lighting or add temporary texture markers.
+**Empty or very small mesh**
+COLMAP needs texture to find keypoints. Dark matte objects (black plastic, metal) are challenging. Use brighter lighting or place the object on a textured surface.
 
-**COLMAP fails entirely** — falls back to OpenCV pose estimation + depth fusion automatically.
+**COLMAP not found**
+Install via `sudo apt install colmap` (Ubuntu) or `brew install colmap` (macOS).
 
-**OOM during meshing** — reduce `--max-faces` or the point cloud will be downsampled more aggressively.
+**OOM during meshing**
+Reduce `--max-faces` or the point cloud will be downsampled more aggressively before Poisson.
