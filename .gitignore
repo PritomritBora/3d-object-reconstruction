@@ -1,0 +1,34 @@
+# Workspaces and outputs
+*_workspace/
+*.obj
+*.ply
+*.mtl
+
+# Input images and videos
+images/
+images_new/
+images_new2/
+images_new3/
+images_new4/
+images_bottle/
+images_temple/
+images_temple_ring/
+images_test/
+*.MOV
+*.mp4
+*.mov
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Model cache
+~/.cache/
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,28 @@
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.7.0
+Pillow>=9.0.0
+
+# 3D processing
+open3d>=0.17.0
+trimesh>=3.22.0
+
+# Depth estimation (Depth Anything V2 Small — preferred fallback)
+# Downloads ~100MB model on first run via HuggingFace hub
+transformers>=4.38.0
+huggingface_hub>=0.20.0
+
+# Background removal — masks foreground object before back-projection
+# Downloads ~170MB U2-Net model on first run
+rembg>=2.0.50
+
+# MiDaS small is loaded via torch.hub as secondary fallback — no pip install needed
+# COLMAP binary must be installed separately (see README)
+
+# Point cloud outlier removal
+scikit-learn>=1.2.0
+
+# Optional: COLMAP Python bindings (improves pose reading)
+# pycolmap>=0.4.0   # install separately if needed: pip install pycolmap
