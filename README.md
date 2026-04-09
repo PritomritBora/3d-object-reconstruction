@@ -119,19 +119,6 @@ Mesh quality depends heavily on input quality.
 
 ---
 
-## Timing Benchmark
-
-Measured on RTX 3060, Buddha head dataset (67 images, 2736×1080):
-
-| Stage | Time |
-|-------|------|
-| Feature extraction / SfM | ~44s |
-| Reconstruction (sparse cloud) | ~3s |
-| Meshing (Poisson + cleanup) | ~2s |
-| **Total** | **~49s** |
-
----
-
 ## Output
 
 - Triangle mesh with vertex normals
