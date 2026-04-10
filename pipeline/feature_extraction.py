@@ -58,15 +58,23 @@ class FeatureExtractor:
         sparse_dir.mkdir(parents=True, exist_ok=True)
         sparse_txt_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resize images — smaller for large sets to keep SIFT fast
+        # Resize images — scale down more aggressively for large sets
         sharp_paths = self._filter_blurry(image_paths)
-        resize_px = cfg("colmap", "resize_large") if len(sharp_paths) > 100 \
-            else cfg("colmap", "resize_small")
+        if len(sharp_paths) > cfg("colmap", "exhaustive_limit"):
+            resize_px = cfg("colmap", "resize_sequential")  # smallest for sequential
+        elif len(sharp_paths) > 100:
+            resize_px = cfg("colmap", "resize_large")
+        else:
+            resize_px = cfg("colmap", "resize_small")
         resized_dir = self._resize_images(sharp_paths, max_size=resize_px)
         use_dir = resized_dir if resized_dir else sharp_paths[0].parent
 
         n = len(sharp_paths)
-        log.info(f"COLMAP: extracting features ({n} images)...")
+        log.info(f"COLMAP: extracting features ({n} images, resize={resize_px}px)...")
+
+        # Reduce features for large sets — faster extraction and matching
+        max_features = cfg("colmap", "max_features") if n <= cfg("colmap", "exhaustive_limit") \
+            else cfg("colmap", "max_features_sequential")
 
         if self._cmd([
             "feature_extractor",
@@ -74,19 +82,20 @@ class FeatureExtractor:
             "--image_path", str(use_dir),
             "--ImageReader.single_camera", "1",
             "--SiftExtraction.use_gpu", "0",
-            f"--SiftExtraction.max_num_features", str(cfg("colmap", "max_features")),
+            f"--SiftExtraction.max_num_features", str(max_features),
             f"--SiftExtraction.peak_threshold", str(cfg("colmap", "peak_threshold")),
         ]) != 0:
             return None
 
         exhaustive_max = cfg("colmap", "exhaustive_limit")
         matcher = "sequential_matcher" if n > exhaustive_max else "exhaustive_matcher"
-        log.info(f"COLMAP: matching ({matcher}, n={n}, exhaustive_limit={exhaustive_max})...")
+        max_matches = "16384" if matcher == "sequential_matcher" else "32768"
+        log.info(f"COLMAP: matching ({matcher}, n={n})...")
         if self._cmd([
             matcher,
             "--database_path", str(db_path),
             "--SiftMatching.use_gpu", "0",
-            "--SiftMatching.max_num_matches", "32768",
+            "--SiftMatching.max_num_matches", max_matches,
             *(["--SequentialMatching.overlap", "10"] if matcher == "sequential_matcher" else []),
         ]) != 0:
             return None

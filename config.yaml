@@ -6,16 +6,17 @@
 
 # ── Input ──────────────────────────────────────────────────────────
 input:
-  blur_threshold_pct: 95  # Keep top X% sharpest frames (center-crop Laplacian)
+  blur_threshold_pct: 90  # Keep top X% sharpest frames (center-crop Laplacian)
 
 # ── Feature Extraction (COLMAP SfM) ────────────────────────────────
 colmap:
-  max_features: 8192        # SIFT keypoints per image (more = slower, better on low-texture)
-  peak_threshold: 0.004     # SIFT peak threshold (lower = more keypoints, default 0.0066)
-  exhaustive_limit: 130     # Use exhaustive matching below this frame count (O(n²)),
-                             # sequential matching above (faster, slightly lower quality)
-  resize_large: 800         # Resize px when >100 images (faster extraction)
-  resize_small: 1024        # Resize px when ≤100 images (better quality)
+  max_features: 8192            # SIFT keypoints per image for exhaustive matching
+  max_features_sequential: 6144 # SIFT keypoints per image for sequential matching
+  peak_threshold: 0.004         # SIFT peak threshold (lower = more keypoints)
+  exhaustive_limit: 130         # Use exhaustive matching below this count, sequential above
+  resize_small: 1024            # Resize px for ≤100 images
+  resize_large: 900             # Resize px for 100–exhaustive_limit images
+  resize_sequential: 800        # Resize px for sequential matching (>exhaustive_limit)
 
 # ── Reconstruction (sparse point cloud) ────────────────────────────
 reconstruction:
