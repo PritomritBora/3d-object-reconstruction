@@ -1,4 +1,4 @@
-# Real-Time 3D Mesh Generation Pipeline
+# 3D Face Mesh Generation Pipeline
 
 Converts a set of RGB images (< 200) into a clean, editable triangle mesh (OBJ/PLY) in under 5 minutes.
 
