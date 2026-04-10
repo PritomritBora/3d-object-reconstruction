@@ -13,8 +13,9 @@ Images
 [1] Feature Extraction & SfM  (COLMAP)
     • Blur filter — removes motion-blurred frames using center-crop Laplacian variance
     • SIFT feature extraction + adaptive matching strategy:
-      - Exhaustive matching (all pairs) for ≤ 130 images — best quality
-      - Sequential matching (adjacent frames) for > 130 images — stays within 5-minute budget
+      - Exhaustive matching (all pairs) for small sets — best quality
+      - Sequential matching (adjacent frames) for large sets — stays within 5-minute budget
+      - Threshold controlled via `exhaustive_limit` in `config.yaml`
     • Incremental SfM → camera poses + sparse 3D point cloud
   │
   ▼

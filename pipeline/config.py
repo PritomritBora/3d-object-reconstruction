@@ -15,7 +15,7 @@ _DEFAULTS = {
         "max_features": 8192,
         "max_features_sequential": 6144,
         "peak_threshold": 0.004,
-        "exhaustive_limit": 130,
+        "exhaustive_limit": 40,
         "resize_small": 1024,
         "resize_large": 900,
         "resize_sequential": 800,
